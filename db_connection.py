@@ -1,11 +1,5 @@
 from db_base import SessionLocal
-from models import *
-
-from db_base import engine
-from models import Base
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
+from models import User, Job
 
 # Пользователь
 def insert_user(user_id: int, username: str) -> None:

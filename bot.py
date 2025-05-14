@@ -8,12 +8,16 @@ from config import BOT_TOKEN
 # from db_connection import init_db
 
 logging.basicConfig(level=logging.INFO)
+from db_base import Base, engine
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
 
 async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    # init_db()
+    init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
