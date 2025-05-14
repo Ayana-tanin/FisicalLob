@@ -1,5 +1,5 @@
 import re
-import asyncio
+import json
 import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from db_connection import insert_user, can_post_more, mark_user_allowed, update_invite_count, save_job, get_user_jobs, delete_job_by_id
+from db_connection import insert_user, can_post_more, mark_user_allowed, get_user_jobs, delete_user_job, update_invite_count
 from config import ADMINS, ADMIN_USERNAME, CHANNEL_ID
 
 router = Router()
@@ -55,13 +55,18 @@ async def handle_job(msg: Message, state: FSMContext, bot: Bot):
             m = re.match(pattern, line.strip())
             if m:
                 data[key] = m.group(1).strip()
-    if not all(k in data for k in ("address", "title", "payment", "contact")):
-        return await msg.reply("❌ Все обязательные поля должны быть заполнены по шаблону.")
+
+    # Проверка наличия контакта (номер телефона)
+    if "contact" not in data:
+        return await msg.reply(
+            "❌ Контакт (номер телефона) обязателен. Пожалуйста, укажите его в формате:\n"
+            "☎️ Контакт: +996501234567"
+        )
 
     if not can_post_more(user_id):
         await msg.answer(
             "🔒 Вы уже выложили 1 вакансию. Чтобы продолжить:\n\n"
-            "💰 Оплатите 100 сом админу <b> или<b/>\n"
+            "💰 Оплатите 100 сом админу или\n"
             "👥 Пригласите 5 друзей в группу.\n\n"
             "После этого админ может дать вам разрешение.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -71,18 +76,16 @@ async def handle_job(msg: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
+    # публикация в канал
     job_text = (
-        f"<b>Вакансия: {data['title']}</b>\n"
-        f"📍 Адрес: {data['address']}\n"
-        f"💵 Оплата: {data['payment']}\n"
+        f"<b>Вакансия: {data.get('title', '')}</b>\n"
+        f"📍 Адрес: {data.get('address', '')}\n"
+        f"💵 Оплата: {data.get('payment', '')}\n"
         f"☎️ Контакт: {data['contact']}"
     )
     if data.get("extra"):
         job_text += f"\n📌 {data['extra']}"
-
-    msg_sent = await bot.send_message(CHANNEL_ID, job_text)
-    save_job(user_id=user_id, message_id=msg_sent.message_id, all_info=data)
-    # print(f"[DEBUG] Сохраняю в БД: {user_id=}, {msg_sent.message_id=}, {data=}")
+    await bot.send_message(CHANNEL_ID, job_text)
 
     update_invite_count(user_id)
     await msg.answer("✅ Вакансия опубликована!")
@@ -90,41 +93,23 @@ async def handle_job(msg: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data == "myjobs")
 async def list_jobs(call: CallbackQuery):
-    user_id = call.from_user.id
-    jobs = await asyncio.get_running_loop().run_in_executor(None, get_user_jobs, user_id)
+    jobs = get_user_jobs(call.from_user.id)
     if not jobs:
-        return await call.message.answer("Нет активных вакансий.")
-    for job in jobs:
-        info = job.all_info
-        text = (
-            f"<b>Вакансия #{job.id}</b>\n"
-            f"📍 Адрес: {info.get('address', '—')}\n"
-            f"📝 Задача: {info.get('title', '—')}\n"
-            f"💵 Оплата: {info.get('payment', '—')}\n"
-            f"☎️ Контакт: {info.get('contact', '—')}"
-        )
-        if info.get("extra"):
-            text += f"\n📌 {info['extra']}"
-        await call.message.answer(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❌ Удалить", callback_data=f"del:{job.id}")]
-            ]),
-            parse_mode="HTML"
-        )
+        return await call.message.answer("Нет вакансий.")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text=f"Удалить: {j[:20]}", callback_data=f"del:{i}")
+        ] for i, j in enumerate(jobs)]
+    )
+    await call.message.answer("Ваши вакансии:", reply_markup=kb)
 
 @router.callback_query(lambda c: c.data.startswith("del:"))
-async def delete_job(call: CallbackQuery, bot: Bot):
+async def delete_job(call: CallbackQuery):
     job_id = int(call.data.split(":")[1])
-    job = await asyncio.get_running_loop().run_in_executor(None, delete_job_by_id, job_id)
-    if job:
-        try:
-            await bot.delete_message(CHANNEL_ID, job.message_id)
-        except Exception as e:
-            logging.warning(f"Ошибка при удалении сообщения из канала: {e}")
-        await call.message.answer(f"✅ Вакансия #{job_id} удалена.")
+    if delete_user_job(call.from_user.id, job_id):
+        await call.message.answer("✅ Вакансия удалена.")
     else:
-        await call.message.answer("❌ Вакансия не найдена или уже удалена.")
+        await call.message.answer("❌ Не удалось удалить.")
 
 @router.message(Command("allow_posting"), F.chat.type == ChatType.PRIVATE)
 async def allow_posting(msg: Message):
