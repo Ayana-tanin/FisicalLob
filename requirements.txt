@@ -1,5 +1,6 @@
+aiohttp==3.9.1
 aiogram==3.20.0
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1
-asyncpg
+gunicorn==22.0.0
