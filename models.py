@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, BigInteger, ForeignKey,
-    DateTime, Boolean, Text
+    DateTime, Boolean, Text, JSON
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -23,7 +23,7 @@ class Job(Base):
     id           = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False)
     message_id   = Column(BigInteger, nullable=False)
-    all_info     = Column(JSONB, nullable=False)
+    all_info     = Column(JSON, nullable=False)
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="jobs")
