@@ -82,15 +82,16 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
     uid = msg.from_user.id
     # Лимит публикаций
     if not can_post_more(uid):
-        await msg.answer(
-            "🔒 Вы уже опубликовали вакансию. Чтобы постить ещё, оплатите 100 сом или пригласите 5 друзей.\n"
-            f"Свяжитесь с админом: https://t.me/{ADMIN_USERNAME}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="👤 Админ", url=f"https://t.me/{ADMIN_USERNAME}")]
-            ])
-        )
-        await state.clear()
-        return
+        if msg.from_user.id not in ADMINS:
+            await msg.answer(
+                "🔒 Вы уже опубликовали вакансию. Чтобы постить ещё, оплатите 100 сом или пригласите 5 друзей.\n"
+                f"Свяжитесь с админом: https://t.me/{ADMIN_USERNAME}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="👤 Админ", url=f"https://t.me/{ADMIN_USERNAME}")]
+                ])
+            )
+            await state.clear()
+            return
 
     save_job(uid, msg.text)
     update_invite_count(uid)
