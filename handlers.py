@@ -132,33 +132,17 @@ async def list_vacancies(call: CallbackQuery):
         return await call.message.answer("У вас пока нет вакансий.")
 
     buttons = []
-    import json
-    for job in jobs:
-        # показываем только активные
-        if not job.message_id:
-            continue
-        info = job.all_info
-        # извлекаем заголовок
-        if isinstance(info, dict):
-            title = info.get('title', f"#{job.id}")
-        else:
-            try:
-                info_dict = json.loads(info)
-                title = info_dict.get('title', f"#{job.id}")
-            except:
-                title = f"#{job.id}"
+    for idx, text in enumerate(jobs):
+        snippet = text if len(text) <= 20 else text[:17] + "..."
         buttons.append([
-            InlineKeyboardButton(
-                text=f"❌ Удалить: {title}",
-                callback_data=f"del:{job.id}"
-            )
+            InlineKeyboardButton(text=f"❌ Удалить: {snippet}", callback_data=f"del:{idx}")
         ])
+
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await call.message.answer("Ваши вакансии:", reply_markup=kb)
 
 @router.callback_query(lambda c: c.data and c.data.startswith("del:"))
 async def delete_vacancy_handler(call: CallbackQuery):
-    """Удаляет вакансию из памяти/БД"""
     await call.answer()
     idx = int(call.data.split(":")[1])
     if delete_job_by_id(call.from_user.id, idx):
