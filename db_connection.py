@@ -85,15 +85,8 @@ def update_invite_count(user_id: int):
 
 
 def save_job(user_id: int, job_text: str) -> None:
-    """
-    Сохраняет текст вакансии в памяти для данного пользователя.
-    """
     user_jobs.setdefault(user_id, []).append(job_text)
 
 def delete_job_by_id(user_id: int, index: int) -> bool:
-    """
-    Удаляет вакансию по индексу, возвращает True при успехе.
-    """
-    from .db_connection import delete_user_job
     return delete_user_job(user_id, index)
 
