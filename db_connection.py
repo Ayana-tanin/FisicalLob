@@ -80,10 +80,9 @@ def update_invite_count(user_id: int):
     with SessionLocal() as session:
         user = session.query(User).filter_by(telegram_id=user_id).first()
         if user:
-            user.invites_count += 1
+            user.invites += 1
             session.commit()
 
-# --- в конце файла db_connection.py, после update_invite_count ---
 
 def save_job(user_id: int, job_text: str) -> None:
     """
