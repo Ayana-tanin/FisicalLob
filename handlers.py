@@ -9,15 +9,7 @@ from aiogram.enums import ChatType, ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from db_connection import (
-    insert_user,
-    can_post_more,
-    mark_user_allowed,
-    save_job,
-    get_user_jobs,
-    delete_job_by_id,
-    update_invite_count,
-)
+from db_connection import *
 from config import CHANNEL_ID, CHANNEL_URL, ADMINS, ADMIN_USERNAME
 
 logger = logging.getLogger(__name__)
@@ -76,15 +68,14 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
     # Валидация
     for fld in ("address", "title", "payment", "contact"):
         if fld not in data:
-            await msg.reply(f"❌ Поле '{fld}' не найдено. Повторите по шаблону.")
+            await msg.reply(f"❌ Поле '{fld}' не найдено. Повторите по шаблону. В точности, без изменений")
             return
 
     uid = msg.from_user.id
-    # Лимит публикаций
     if not can_post_more(uid):
-        if msg.from_user.id not in ADMINS:
+        if uid not in ADMINS:
             await msg.answer(
-                "🔒 Вы уже опубликовали вакансию. Чтобы постить ещё, оплатите 100 сом или пригласите 5 друзей.\n"
+                "🔒 Вы уже опубликовали вакансию. Чтобы постить ещё, оплатите 100 сом или добавьте 5 друзей в группу.\n"
                 f"Свяжитесь с админом: https://t.me/{ADMIN_USERNAME}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="👤 Админ", url=f"https://t.me/{ADMIN_USERNAME}")]
@@ -93,10 +84,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
             await state.clear()
             return
 
-    save_job(uid, msg.text)
-    update_invite_count(uid)
-
-    # Публикация в канал
+    # Публикация вакансии в канал
     posted = await bot.send_message(
         chat_id=CHANNEL_ID,
         text=(f"<b>Вакансия: {data['title']}</b>\n"
@@ -107,76 +95,87 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         parse_mode=ParseMode.HTML
     )
 
+    # Сохраняем вакансию в базу
+    saved = await asyncio.to_thread(save_job_db, uid, posted.message_id, data)
+    if not saved:
+        await msg.answer("❌ Ошибка при сохранении вакансии в базе.")
+        return
+
+    update_invite_count(uid)
+
     await msg.answer(
         "✅ Ваша вакансия опубликована. Чтобы удалить — выберите 'Мои вакансии'.",
         reply_markup=kb_menu
     )
     await state.clear()
 
-    # URL для отклика
-    # if msg.from_user.username:
-    #     reply_url = f"https://t.me/{msg.from_user.username}"
-    # else:
-    #     reply_url = f"tg://user?id={msg.from_user.id}"
-    # markup = InlineKeyboardMarkup(inline_keyboard=[
-    #     [InlineKeyboardButton(text="💬 Откликнуться", url=reply_url)]
-    # ])
 
-
-# Просмотр вакансий с заголовками
+#осмотр вакансий с заголовками
 @router.callback_query(F.data == "list")
 async def list_vacancies(call: CallbackQuery):
     await call.answer()
-    jobs = get_user_jobs(call.from_user.id)
+    jobs = await asyncio.to_thread(get_user_jobs_db, call.from_user.id)
     if not jobs:
-        return await call.message.answer("У вас пока нет вакансий.")
+        await call.message.edit_text("У вас пока нет вакансий.")
+        return
 
     buttons = []
-    for idx, text in enumerate(jobs):
-        snippet = text if len(text) <= 20 else text[:17] + "..."
+    for idx, job in enumerate(jobs):
+        title = job.all_info.get("title", "Без названия")
+        snippet = title if len(title) <= 20 else title[:17] + "..."
         buttons.append([
             InlineKeyboardButton(text=f"❌ Удалить: {snippet}", callback_data=f"del:{idx}")
         ])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await call.message.answer("Ваши вакансии:", reply_markup=kb)
+    await call.message.edit_text("Ваши вакансии:", reply_markup=kb)
 
 @router.callback_query(lambda c: c.data and c.data.startswith("del:"))
 async def delete_vacancy_handler(call: CallbackQuery):
     await call.answer()
     idx = int(call.data.split(":")[1])
-    if delete_job_by_id(call.from_user.id, idx):
-        await call.message.answer("✅ Вакансия удалена.")
-    else:
-        await call.message.answer("❌ Ошибка при удалении.")
+    user_id = call.from_user.id
 
-# Блокировка сообщений в группах
-@router.message(F.chat.type.in_([ChatType.GROUP, ChatType.SUPERGROUP]))
-async def block_non_admins(message: Message):
+    message_id, success = await asyncio.to_thread(delete_job_and_get_message, user_id, idx)
+    if not success:
+        await call.message.answer("❌ Вакансия не найдена или не удалена.")
+        return
+
     try:
-        user_id = message.from_user.id if message.from_user else None
-        if user_id not in ADMINS:
-            logger.info(f"Удаляем сообщение от {user_id} в чате {message.chat.id}")
-            await message.delete()
-            bot_user = await message.bot.get_me()
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="📝 Опубликовать вакансию",
-                    url=f"https://t.me/{bot_user.username}"                )]
-            ])
-            warn = await message.answer(
-                "<b>Сообщения в группе не от бота запрещены!</b>\n\n"
-                "Чтобы опубликовать вакансию, перейдите в личку бота.",
-                reply_markup=kb,
-                parse_mode=ParseMode.HTML
-            )
-            await asyncio.sleep(120)
-            try:
-                await warn.delete()
-            except Exception as e:
-                logger.error(f"Не удалось удалить предупреждение: {e}")
+        await call.bot.delete_message(chat_id=CHANNEL_ID, message_id=message_id)
     except Exception as e:
-        logger.error(f"Ошибка в block_non_admins: {e}")
+        logger.warning(f"Не удалось удалить сообщение в Telegram: {e}")
+
+    jobs = await asyncio.to_thread(get_user_jobs_db, user_id)
+    if not jobs:
+        await call.message.edit_text("У вас пока нет вакансий.")
+        return
+
+    buttons = []
+    for i, job in enumerate(jobs):
+        title = job.all_info.get("title", "Без названия")
+        snippet = title if len(title) <= 20 else title[:17] + "..."
+        buttons.append([
+            InlineKeyboardButton(text=f"❌ Удалить: {snippet}", callback_data=f"del:{i}")
+        ])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await call.message.edit_text("Ваши вакансии:", reply_markup=kb)
+
+@router.message(Command("allow_posting"))
+async def allow_posting_handler(message: Message):
+    if message.from_user.id not in ADMINS:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+
+    args = message.get_args().strip()
+    if not args:
+        await message.answer("❗️ Использование: /allow_posting @username или /allow_posting user_id")
+        return
+
+    success, response_msg = allow_user_posting(args)
+    await message.answer(response_msg)
+
 
 @router.message(F.chat.type.in_([ChatType.GROUP, ChatType.SUPERGROUP]))
 async def block_non_admins(message: Message):

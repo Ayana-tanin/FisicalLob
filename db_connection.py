@@ -1,17 +1,12 @@
 import datetime
 import logging
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from db_base import SessionLocal
 from models import User, Job
+from sqlalchemy import func, and_
 
 logger = logging.getLogger(__name__)
-
-# Временное хранилище вакансий (можно заменить на запросы к БД)
-user_jobs = {}
-
-# Лимит бесплатных публикаций в день
-DAILY_LIMIT = 1
 
 
 def init_db():
@@ -51,30 +46,6 @@ def insert_user(user_id: int, username: str) -> None:
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при добавлении пользователя {user_id}: {str(e)}")
 
-def can_post_more(user_id: int) -> bool:
-    with SessionLocal() as session:
-        user = session.query(User).filter_by(telegram_id=user_id).first()
-        if not user:
-            return False
-        if user.telegram_id in user_jobs and len(user_jobs[user.telegram_id]) >= DAILY_LIMIT:
-            return user.can_post
-        return True
-
-def mark_user_allowed(user_id: int) -> None:
-    with SessionLocal() as session:
-        user = session.query(User).filter_by(telegram_id=user_id).first()
-        if user:
-            user.can_post = True
-            session.commit()
-
-def get_user_jobs(user_id: int) -> list[str]:
-    return user_jobs.get(user_id, [])
-
-def delete_user_job(user_id: int, index: int) -> bool:
-    if user_id in user_jobs and 0 <= index < len(user_jobs[user_id]):
-        user_jobs[user_id].pop(index)
-        return True
-    return False
 
 def update_invite_count(user_id: int):
     with SessionLocal() as session:
@@ -83,10 +54,91 @@ def update_invite_count(user_id: int):
             user.invites += 1
             session.commit()
 
+def allow_user_posting(user_identifier: str) -> (bool, str):
+    """
+    Разрешить пользователю публиковать вакансии (can_post = True).
+    user_identifier — либо username без @, либо telegram_id (int в строке).
+    Возвращает кортеж (успех, сообщение).
+    """
+    try:
+        with SessionLocal() as session:
+            if user_identifier.startswith("@"):
+                username = user_identifier[1:]
+                user = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+                if not user:
+                    return False, f"Пользователь с username @{username} не найден."
+            else:
+                if user_identifier.isdigit():
+                    user = session.query(User).filter_by(telegram_id=int(user_identifier)).first()
+                    if not user:
+                        return False, f"Пользователь с ID {user_identifier} не найден."
+                else:
+                    return False, "Некорректный user_id или username."
 
-def save_job(user_id: int, job_text: str) -> None:
-    user_jobs.setdefault(user_id, []).append(job_text)
+            user.can_post = True
+            session.commit()
+            return True, f"Пользователю @{user.username} (ID {user.telegram_id}) разрешена публикация вакансий."
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка базы при allow_user_posting: {e}")
+        return False, "Ошибка при обращении к базе данных."
 
-def delete_job_by_id(user_id: int, index: int) -> bool:
-    return delete_user_job(user_id, index)
 
+def save_job_db(user_id: int, message_id: int, all_info: dict) -> bool:
+    try:
+        with SessionLocal() as session:
+            job = Job(user_id=user_id, message_id=message_id, all_info=all_info)
+            session.add(job)
+            session.commit()
+        return True
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при сохранении вакансии: {e}")
+        return False
+
+def get_user_jobs_db(user_id: int) -> list[Job]:
+    try:
+        with SessionLocal() as session:
+            jobs = session.query(Job).filter_by(user_id=user_id).order_by(Job.created_at.desc()).all()
+        return jobs
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при получении вакансий: {e}")
+        return []
+
+def delete_job_and_get_message(user_id: int, index: int) -> tuple[int | None, bool]:
+    try:
+        with SessionLocal() as session:
+            jobs = session.query(Job).filter_by(user_id=user_id).order_by(Job.created_at.desc()).all()
+            if index < 0 or index >= len(jobs):
+                return None, False
+            job = jobs[index]
+            message_id = job.message_id
+            session.delete(job)
+            session.commit()
+            return message_id, True
+    except SQLAlchemyError as e:
+        logger.error(f"Ошибка при удалении вакансии: {e}")
+        return None, False
+
+def can_post_more(user_id: int, daily_limit: int = 1) -> bool:
+    try:
+        with SessionLocal() as session:
+            user = session.query(User).filter_by(telegram_id=user_id).first()
+            if not user:
+                return False  # пользователь не найден — запретить
+
+            # Если у пользователя can_post = True — разрешаем всегда
+            if user.can_post:
+                return True
+
+            # Считаем, сколько вакансий пользователь опубликовал сегодня
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            count_today = session.query(func.count(Job.id)).filter(
+                and_(
+                    Job.user_id == user_id,
+                    Job.created_at >= today_start
+                )
+            ).scalar()
+
+            return count_today < daily_limit
+    except Exception as e:
+        logger.error(f"Ошибка при проверке can_post_more: {e}")
+        return False
