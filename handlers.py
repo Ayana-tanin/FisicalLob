@@ -168,10 +168,12 @@ async def allow_posting_handler(message: Message):
         await message.answer("❌ У вас нет прав для этой команды.")
         return
 
-    args = message.get_args().strip()
-    if not args:
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
         await message.answer("❗️ Использование: /allow_posting @username или /allow_posting user_id")
         return
+
+    args = parts[1].strip()
 
     success, response_msg = allow_user_posting(args)
     await message.answer(response_msg)
