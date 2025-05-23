@@ -28,10 +28,13 @@ TEMPLATE = {
 }
 PHONE_RE = re.compile(r"^\+?\d[\d\s\-]{7,}\d$")
 kb_menu = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✉️ Выложить вакансию", callback_data="create")],
-        [InlineKeyboardButton(text="📋 Мои вакансии", callback_data="list")],
-        [InlineKeyboardButton(text="🌐 Канал", url=CHANNEL_URL)]
-    ])
+    [InlineKeyboardButton(text="✉️ Выложить вакансию", callback_data="create")],
+    [InlineKeyboardButton(text="📋 Мои вакансии", callback_data="list")],
+    [InlineKeyboardButton(text="💳 Оплатить или добавить 5 друзей", callback_data="access")],
+    [InlineKeyboardButton(text="📞 Связаться с админом", url=f"https://t.me/{ADMIN_USERNAME}")],
+    [InlineKeyboardButton(text="🌐 Канал", url=CHANNEL_URL)]
+])
+
 
 @router.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(msg: Message):
@@ -103,6 +106,18 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
 
     update_invite_count(uid)
 
+    buttons = []
+    buttons.append([InlineKeyboardButton(
+        text="📨 Откликнуться",
+        url=f"https://t.me/{msg.from_user.username}"
+    )])
+
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="Текст вакансии",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
     await msg.answer(
         "✅ Ваша вакансия опубликована. Чтобы удалить — выберите 'Мои вакансии'.",
         reply_markup=kb_menu
@@ -161,6 +176,19 @@ async def delete_vacancy_handler(call: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await call.message.edit_text("Ваши вакансии:", reply_markup=kb)
+
+@router.callback_query(F.data == "access")
+async def show_access_options(call: CallbackQuery):
+    await call.answer()
+    await call.message.answer(
+        "Чтобы продолжить публикацию:\n"
+        "1. Оплатите 100 сом (ссылка ниже)\n"
+        "2. Или добавьте 5 друзей в наш чат.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💸 Оплатить", url="https://your.payment.link")],
+            [InlineKeyboardButton(text="🤝 Как добавить 5 друзей?", callback_data="how_invite")]
+        ])
+    )
 
 @router.message(Command("allow_posting"))
 async def allow_posting_handler(message: Message):
