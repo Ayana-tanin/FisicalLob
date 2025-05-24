@@ -404,7 +404,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                 
                 # Обновляем сообщение в канале
                 vacancy_text = (
-                    f"<b>🔥 {data['title']}</b>\n\n"
+                    f"<b>Вакансия {data['title']}</b>\n\n"
                     f"📍 <b>Адрес:</b> {data['address']}\n"
                     f"💵 <b>Оплата:</b> {data['payment']}\n"
                     f"☎️ <b>Контакт:</b> {data['contact']}"
@@ -414,11 +414,27 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                     vacancy_text += f"\n📌 <b>Примечание:</b> {data['extra']}"
                 
                 try:
+                    # Обновляем текст сообщения
                     await bot.edit_message_text(
                         chat_id=CHANNEL_ID,
                         message_id=job.message_id,
                         text=vacancy_text,
                         parse_mode=ParseMode.HTML
+                    )
+                    
+                    # Обновляем кнопку отклика
+                    response_button = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="📨 Откликнуться",
+                            url=f"https://t.me/{msg.from_user.username}" if msg.from_user.username
+                            else f"tg://user?id={msg.from_user.id}"
+                        )]
+                    ])
+                    
+                    await bot.edit_message_reply_markup(
+                        chat_id=CHANNEL_ID,
+                        message_id=job.message_id,
+                        reply_markup=response_button
                     )
                     
                     session.commit()
@@ -436,7 +452,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
             try:
                 # Публикация в канал
                 vacancy_text = (
-                    f"<b>🔥 {data['title']}</b>\n\n"
+                    f"<b>Вакансия {data['title']}</b>\n\n"
                     f"📍 <b>Адрес:</b> {data['address']}\n"
                     f"💵 <b>Оплата:</b> {data['payment']}\n"
                     f"☎️ <b>Контакт:</b> {data['contact']}"
@@ -662,38 +678,38 @@ async def allow_posting_handler(message: Message):
             old_can_post_until = user.can_post_until
             old_allowed_posts = user.allowed_posts
 
-            if is_permanent:
-                # Постоянное разрешение
-                user.can_post = True
-                user.can_post_until = None
-                user.allowed_posts = 0
-                msg = f"✅ Пользователю {username_or_id} предоставлено постоянное разрешение."
-                logger.info(
-                    f"Админ {message.from_user.id} выдал постоянное разрешение пользователю {user.telegram_id} "
-                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
-                )
-            elif is_month:
-                # Месячная подписка
-                user.can_post = False  # Сбрасываем постоянное разрешение
-                user.can_post_until = datetime.now(timezone.utc) + timedelta(days=30)
-                user.allowed_posts = 0  # Сбрасываем разовые публикации
-                msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}"
-                logger.info(
-                    f"Админ {message.from_user.id} выдал месячную подписку пользователю {user.telegram_id} "
-                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
-                )
-            else:
-                # Разовая публикация
-                user.can_post = False  # Сбрасываем постоянное разрешение
-                user.can_post_until = None  # Сбрасываем подписку
-                user.allowed_posts += 1  # Добавляем одну публикацию
-                msg = f"✅ Пользователю {username_or_id} добавлена 1 публикация. Всего: {user.allowed_posts}"
-                logger.info(
-                    f"Админ {message.from_user.id} добавил публикацию пользователю {user.telegram_id} "
-                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
-                )
-
             try:
+                if is_permanent:
+                    # Постоянное разрешение
+                    user.can_post = True
+                    user.can_post_until = None
+                    user.allowed_posts = 0
+                    msg = f"✅ Пользователю {username_or_id} предоставлено постоянное разрешение."
+                    logger.info(
+                        f"Админ {message.from_user.id} выдал постоянное разрешение пользователю {user.telegram_id} "
+                        f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                    )
+                elif is_month:
+                    # Месячная подписка
+                    user.can_post = False  # Сбрасываем постоянное разрешение
+                    user.can_post_until = datetime.now(timezone.utc) + timedelta(days=30)
+                    user.allowed_posts = 0  # Сбрасываем разовые публикации
+                    msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}"
+                    logger.info(
+                        f"Админ {message.from_user.id} выдал месячную подписку пользователю {user.telegram_id} "
+                        f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                    )
+                else:
+                    # Разовая публикация
+                    user.can_post = False  # Сбрасываем постоянное разрешение
+                    user.can_post_until = None  # Сбрасываем подписку
+                    user.allowed_posts += 1  # Добавляем одну публикацию
+                    msg = f"✅ Пользователю {username_or_id} добавлена 1 публикация. Всего: {user.allowed_posts}"
+                    logger.info(
+                        f"Админ {message.from_user.id} добавил публикацию пользователю {user.telegram_id} "
+                        f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                    )
+
                 session.commit()
                 await message.answer(msg)
                 
@@ -706,15 +722,21 @@ async def allow_posting_handler(message: Message):
                     )
                 except Exception as notify_e:
                     logger.error(f"Не удалось отправить уведомление пользователю {user.telegram_id}: {notify_e}")
+                    # Не прерываем выполнение, если не удалось отправить уведомление
                 
-            except Exception as commit_e:
-                logger.error(f"Ошибка при сохранении изменений для пользователя {user.telegram_id}: {commit_e}")
-                await message.answer("❌ Ошибка при сохранении изменений в базе данных.")
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении прав пользователя {user.telegram_id}: {e}")
                 session.rollback()
+                await message.answer(
+                    "❌ Произошла ошибка при обновлении прав. Пожалуйста, попробуйте еще раз или обратитесь к разработчику."
+                )
+                return
 
     except Exception as e:
         logger.error(f"Ошибка в allow_posting_handler: {e}")
-        await message.answer("❌ Ошибка при выполнении команды.")
+        await message.answer(
+            "❌ Произошла ошибка при выполнении команды. Пожалуйста, попробуйте еще раз или обратитесь к разработчику."
+        )
 
 
 @router.message(F.chat.type.in_([ChatType.GROUP, ChatType.SUPERGROUP]))
