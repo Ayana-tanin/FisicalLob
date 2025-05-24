@@ -657,22 +657,60 @@ async def allow_posting_handler(message: Message):
                 await message.answer("❌ Пользователь не найден в базе.")
                 return
 
+            # Сохраняем старые значения для логирования
+            old_can_post = user.can_post
+            old_can_post_until = user.can_post_until
+            old_allowed_posts = user.allowed_posts
+
             if is_permanent:
+                # Постоянное разрешение
                 user.can_post = True
                 user.can_post_until = None
                 user.allowed_posts = 0
                 msg = f"✅ Пользователю {username_or_id} предоставлено постоянное разрешение."
+                logger.info(
+                    f"Админ {message.from_user.id} выдал постоянное разрешение пользователю {user.telegram_id} "
+                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                )
             elif is_month:
+                # Месячная подписка
+                user.can_post = False  # Сбрасываем постоянное разрешение
                 user.can_post_until = datetime.now(timezone.utc) + timedelta(days=30)
-                user.allowed_posts = 0
-                user.can_post = False
-                msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций."
+                user.allowed_posts = 0  # Сбрасываем разовые публикации
+                msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}"
+                logger.info(
+                    f"Админ {message.from_user.id} выдал месячную подписку пользователю {user.telegram_id} "
+                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                )
             else:
-                user.allowed_posts += 1
+                # Разовая публикация
+                user.can_post = False  # Сбрасываем постоянное разрешение
+                user.can_post_until = None  # Сбрасываем подписку
+                user.allowed_posts += 1  # Добавляем одну публикацию
                 msg = f"✅ Пользователю {username_or_id} добавлена 1 публикация. Всего: {user.allowed_posts}"
+                logger.info(
+                    f"Админ {message.from_user.id} добавил публикацию пользователю {user.telegram_id} "
+                    f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
+                )
 
-            session.commit()
-            await message.answer(msg)
+            try:
+                session.commit()
+                await message.answer(msg)
+                
+                # Отправляем уведомление пользователю
+                try:
+                    await message.bot.send_message(
+                        user.telegram_id,
+                        f"🎉 {msg}\n\n"
+                        "Теперь вы можете опубликовать вакансию через меню бота."
+                    )
+                except Exception as notify_e:
+                    logger.error(f"Не удалось отправить уведомление пользователю {user.telegram_id}: {notify_e}")
+                
+            except Exception as commit_e:
+                logger.error(f"Ошибка при сохранении изменений для пользователя {user.telegram_id}: {commit_e}")
+                await message.answer("❌ Ошибка при сохранении изменений в базе данных.")
+                session.rollback()
 
     except Exception as e:
         logger.error(f"Ошибка в allow_posting_handler: {e}")
