@@ -142,3 +142,50 @@ def can_post_more(user_id: int, daily_limit: int = 1) -> bool:
     except Exception as e:
         logger.error(f"Ошибка при проверке can_post_more: {e}")
         return False
+
+
+def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
+    """
+    Расширенная проверка возможности публикации вакансии
+    Возвращает: (может_публиковать, сообщение, количество_приглашений)
+    """
+    try:
+        with SessionLocal() as session:
+            user = session.query(User).filter_by(telegram_id=user_id).first()
+
+            if not user:
+                # Новый пользователь - первая публикация бесплатно
+                return True, "Первая публикация бесплатно!", 0
+
+            # Если у пользователя can_post = True - всегда можем
+            if user.can_post:
+                return True, "У вас есть разрешение на публикацию", user.invites
+
+            now = datetime.datetime.utcnow()
+
+            # Проверка месячной подписки
+            if user.can_post_until and user.can_post_until > now:
+                return True, "У вас есть месячная подписка", user.invites
+
+            # Проверка разовых публикаций
+            if user.allowed_posts > 0:
+                return True, f"Осталось публикаций: {user.allowed_posts}", user.invites
+
+            # Проверка первой бесплатной публикации
+            job_count = session.query(func.count(Job.id)).filter_by(user_id=user_id).scalar()
+            if job_count == 0:
+                return True, "Первая публикация бесплатно!", user.invites
+
+            # Проверка приглашенных друзей (5+ друзей = 1 публикация)
+            if user.invites >= 5:
+                # Даем одну публикацию и сбрасываем счетчик приглашений
+                user.allowed_posts = 1
+                user.invites = 0  # Сбрасываем счетчик
+                session.commit()
+                return True, "Получена публикация за приглашение друзей!", 0
+
+            return False, "Вы уже опубликовали бесплатную вакансию.", user.invites
+
+    except Exception as e:
+        logger.error(f"Ошибка при can_post_more_extended для пользователя {user_id}: {e}")
+        return False, "Ошибка при проверке прав доступа.", 0
