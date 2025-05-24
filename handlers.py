@@ -374,7 +374,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         # Валидация телефона
         if not PHONE_RE.match(data['contact']):
             await msg.reply(
-                "❌ Неверный формат телефона. Используйте формат: +996XXXXXXXXX\n"
+                "❌ Неверный формат телефона. Используйте формат: +996XXXXXXXXX. Без букв\n"
                 "Пожалуйста, заполните форму заново:"
             )
             await prepare_vacancy_impl(msg, state)
@@ -915,12 +915,164 @@ async def user_info_handler(message: Message):
         await message.answer("❌ Ошибка при получении информации о пользователе.")
 
 
-# Обработчик неизвестных сообщений в приватном чате
+@router.message(Command("post_all"))
+async def post_all_handler(message: Message, state: FSMContext):
+    """Команда для админов - автоматическая публикация всех сообщений"""
+    if message.from_user.id not in ADMINS:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+
+    try:
+        # Сохраняем состояние, что админ находится в режиме автоматической публикации
+        await state.update_data(auto_posting=True)
+        
+        await message.answer(
+            "✅ Режим автоматической публикации включен.\n\n"
+            "📝 Отправляйте сообщения в формате вакансии, и они будут автоматически публиковаться.\n"
+            "❌ Для отключения отправьте /stop_posting\n\n"
+            "⚠️ Сообщения должны строго соответствовать формату:\n"
+            "📍 Адрес: \n"
+            "📝 Задача: \n"
+            "💵 Оплата: \n"
+            "☎️ Контакт: \n"
+            "📌 Примечание: (необязательно)"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при включении режима автоматической публикации: {e}")
+        await message.answer("❌ Произошла ошибка при включении режима автоматической публикации.")
+
+
+@router.message(Command("stop_posting"))
+async def stop_posting_handler(message: Message, state: FSMContext):
+    """Отключение режима автоматической публикации"""
+    if message.from_user.id not in ADMINS:
+        return
+
+    try:
+        await state.clear()
+        await message.answer("✅ Режим автоматической публикации отключен.")
+    except Exception as e:
+        logger.error(f"Ошибка при отключении режима автоматической публикации: {e}")
+        await message.answer("❌ Произошла ошибка при отключении режима автоматической публикации.")
+
+
 @router.message(F.chat.type == ChatType.PRIVATE)
+async def handle_private_messages(message: Message, state: FSMContext):
+    """Обработчик всех сообщений в приватном чате"""
+    try:
+        # Проверяем, включен ли режим автоматической публикации
+        state_data = await state.get_data()
+        if state_data.get('auto_posting') and message.from_user.id in ADMINS:
+            # Проверяем, соответствует ли сообщение формату вакансии
+            lines = message.text.strip().splitlines()
+            data = {}
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                for key, pat in TEMPLATE.items():
+                    m = re.match(pat, line)
+                    if m:
+                        data[key] = m.group(1).strip()
+                        break
+
+            # Проверяем наличие всех обязательных полей
+            required_fields = ["address", "title", "payment", "contact"]
+            missing_fields = [field for field in required_fields if field not in data or not data[field]]
+
+            if not missing_fields and PHONE_RE.match(data['contact']):
+                # Если все поля на месте и телефон валидный, публикуем вакансию
+                try:
+                    # Публикация в канал
+                    vacancy_text = (
+                        f"<b>Вакансия {data['title']}</b>\n\n"
+                        f"📍 <b>Адрес:</b> {data['address']}\n"
+                        f"💵 <b>Оплата:</b> {data['payment']}\n"
+                        f"☎️ <b>Контакт:</b> {data['contact']}"
+                    )
+
+                    if data.get('extra'):
+                        vacancy_text += f"\n📌 <b>Примечание:</b> {data['extra']}"
+
+                    posted = await message.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=vacancy_text,
+                        parse_mode=ParseMode.HTML
+                    )
+
+                    # Кнопка отклика
+                    response_button = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="📨 Откликнуться",
+                            url=f"https://t.me/{message.from_user.username}" if message.from_user.username
+                            else f"tg://user?id={message.from_user.id}"
+                        )]
+                    ])
+
+                    await message.bot.edit_message_reply_markup(
+                        chat_id=CHANNEL_ID,
+                        message_id=posted.message_id,
+                        reply_markup=response_button
+                    )
+
+                    # Сохраняем в базу
+                    saved = await asyncio.to_thread(
+                        save_job_db,
+                        message.from_user.id,
+                        posted.message_id,
+                        data
+                    )
+
+                    if saved:
+                        await message.answer(
+                            f"✅ Вакансия опубликована!\n"
+                            f"📄 Ссылка: {CHANNEL_URL}/{posted.message_id}"
+                        )
+                    else:
+                        await message.answer("❌ Ошибка при сохранении вакансии в базу данных.")
+                        # Удаляем сообщение из канала
+                        try:
+                            await message.bot.delete_message(chat_id=CHANNEL_ID, message_id=posted.message_id)
+                        except Exception as delete_e:
+                            logger.error(f"Не удалось удалить сообщение из канала: {delete_e}")
+
+                except Exception as e:
+                    logger.error(f"Ошибка при публикации вакансии в режиме auto_posting: {e}")
+                    await message.answer("❌ Ошибка при публикации вакансии.")
+            else:
+                # Если формат не соответствует, отправляем сообщение об ошибке
+                if missing_fields:
+                    field_names = {
+                        "address": "📍 Адрес",
+                        "title": "📝 Задача",
+                        "payment": "💵 Оплата",
+                        "contact": "☎️ Контакт"
+                    }
+                    missing_names = [field_names[f] for f in missing_fields]
+                    await message.answer(
+                        f"❌ Не заполнены поля: {', '.join(missing_names)}\n"
+                        "Сообщение не будет опубликовано."
+                    )
+                elif not PHONE_RE.match(data.get('contact', '')):
+                    await message.answer(
+                        "❌ Неверный формат телефона. Используйте формат: +996XXXXXXXXX\n"
+                        "Сообщение не будет опубликовано."
+                    )
+        else:
+            # Если не в режиме auto_posting, обрабатываем как обычное сообщение
+            await unknown_message(message)
+
+    except Exception as e:
+        logger.error(f"Ошибка в handle_private_messages: {e}")
+        await message.answer("❌ Произошла ошибка при обработке сообщения.")
+
+
 async def unknown_message(message: Message):
     """Обработчик неизвестных сообщений"""
     await message.answer(
-        "Не понимаю вас \n",
+        "Не понимаю вас \n"
         "Используйте кнопки меню для навигации:",
         reply_markup=kb_menu
     )
