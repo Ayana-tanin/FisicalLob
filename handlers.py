@@ -321,7 +321,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         if not editing_job_id:
             with SessionLocal() as session:
                 last_job = session.query(Job).filter_by(user_id=uid).order_by(Job.created_at.desc()).first()
-                if last_job and (datetime.now(timezone.utc) - last_job.created_at).total_seconds() < 300:
+                if last_job and (datetime.utcnow() - last_job.created_at).total_seconds() < 300:
                     await msg.answer(
                         "⏳ Подождите 5 минут перед публикацией следующей вакансии.",
                         reply_markup=kb_menu
@@ -843,7 +843,7 @@ async def stats_handler(message: Message):
             total_users = session.query(func.count(User.id)).scalar()
             total_jobs = session.query(func.count(Job.id)).scalar()
             active_subscriptions = session.query(func.count(User.id)).filter(
-                User.can_post_until > datetime.now(timezone.utc)
+                User.can_post_until > datetime.utcnow()
             ).scalar()
             permanent_users = session.query(func.count(User.id)).filter(
                 User.can_post == True
@@ -916,7 +916,7 @@ async def user_info_handler(message: Message):
 async def unknown_message(message: Message):
     """Обработчик неизвестных сообщений"""
     await message.answer(
-        "🤔 Не понимаю вашего сообщения.\n"
+        "Не понимаю вас \n",
         "Используйте кнопки меню для навигации:",
         reply_markup=kb_menu
     )
