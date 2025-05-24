@@ -11,7 +11,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatType, ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from db_connection import *
@@ -320,8 +320,12 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         # Проверка на спам (только для новых вакансий)
         if not editing_job_id:
             with SessionLocal() as session:
-                last_job = session.query(Job).filter_by(user_id=uid).order_by(Job.created_at.desc()).first()
-                if last_job and (datetime.utcnow() - last_job.created_at).total_seconds() < 300:
+                last_job = session.query(Job).filter(
+                    Job.user_id == uid,
+                    Job.created_at >= datetime.now() - timedelta(minutes=5)
+                ).first()
+                
+                if last_job and (datetime.now() - last_job.created_at).total_seconds() < 300:
                     await msg.answer(
                         "⏳ Подождите 5 минут перед публикацией следующей вакансии.",
                         reply_markup=kb_menu
@@ -613,7 +617,7 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
                 return True, "У вас есть постоянное разрешение на публикацию", user.invites
 
             # Проверка месячной подписки
-            if user.can_post_until and user.can_post_until > datetime.utcnow():
+            if user.can_post_until and user.can_post_until > datetime.now():
                 return True, f"У вас есть месячная подписка до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}", user.invites
 
             # Проверка разовых публикаций
@@ -693,7 +697,7 @@ async def allow_posting_handler(message: Message):
                 elif is_month:
                     # Месячная подписка - сбрасываем can_post
                     user.can_post = False
-                    user.can_post_until = datetime.utcnow() + timedelta(days=30)
+                    user.can_post_until = datetime.now() + timedelta(days=30)
                     user.allowed_posts = 0
                     msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}"
                     logger.info(
@@ -843,7 +847,7 @@ async def stats_handler(message: Message):
             total_users = session.query(func.count(User.id)).scalar()
             total_jobs = session.query(func.count(Job.id)).scalar()
             active_subscriptions = session.query(func.count(User.id)).filter(
-                User.can_post_until > datetime.utcnow()
+                User.can_post_until > datetime.now()
             ).scalar()
             permanent_users = session.query(func.count(User.id)).filter(
                 User.can_post == True

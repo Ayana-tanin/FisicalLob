@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from db_base import SessionLocal
 from models import User, Job
 from sqlalchemy import func, and_
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def can_post_more(user_id: int, daily_limit: int = 1) -> bool:
                 return True
 
             # Считаем, сколько вакансий пользователь опубликовал сегодня
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             count_today = session.query(func.count(Job.id)).filter(
                 and_(
                     Job.user_id == user_id,
@@ -161,7 +162,7 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
             if user.can_post:
                 return True, "У вас есть разрешение на публикацию", user.invites
 
-            now = datetime.datetime.utcnow()
+            now = datetime.now()
 
             # Проверка месячной подписки
             if user.can_post_until and user.can_post_until > now:
@@ -189,3 +190,38 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
     except Exception as e:
         logger.error(f"Ошибка при can_post_more_extended для пользователя {user_id}: {e}")
         return False, "Ошибка при проверке прав доступа.", 0
+
+def get_daily_stats():
+    """Получение статистики за текущий день"""
+    with SessionLocal() as session:
+        # Получаем начало текущего дня
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Получаем статистику за день
+        daily_jobs = session.query(func.count(Job.id)).filter(
+            Job.created_at >= today_start
+        ).scalar()
+        
+        daily_users = session.query(func.count(User.id)).filter(
+            User.created_at >= today_start
+        ).scalar()
+        
+        return {
+            'daily_jobs': daily_jobs or 0,
+            'daily_users': daily_users or 0
+        }
+
+def update_user_last_activity(user_id: int):
+    """Обновление времени последней активности пользователя"""
+    with SessionLocal() as session:
+        try:
+            user = session.query(User).filter(User.user_id == user_id).first()
+            if user:
+                now = datetime.now()
+                user.last_activity = now
+                session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении времени активности пользователя {user_id}: {str(e)}")
+            session.rollback()
+        return False
