@@ -189,10 +189,3 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
     except Exception as e:
         logger.error(f"Ошибка при can_post_more_extended для пользователя {user_id}: {e}")
         return False, "Ошибка при проверке прав доступа.", 0
-
-def get_daily_stats():
-    """Получение статистики за день"""
-    try:
-        with SessionLocal() as session:
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            # ... rest of the function ...
