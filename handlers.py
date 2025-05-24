@@ -285,10 +285,42 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         state_data = await state.get_data()
         editing_job_id = state_data.get('editing_job_id')
         
+        uid = msg.from_user.id
+
+        # Проверяем существование пользователя в базе
+        with SessionLocal() as session:
+            user = session.query(User).filter_by(telegram_id=uid).first()
+            if not user:
+                # Если пользователя нет, создаем его
+                try:
+                    insert_user(uid, msg.from_user.username or "")
+                    user = session.query(User).filter_by(telegram_id=uid).first()
+                except Exception as e:
+                    logger.error(f"Ошибка при создании пользователя {uid}: {e}")
+                    # Отправляем ошибку админам
+                    for admin_id in ADMINS:
+                        try:
+                            await bot.send_message(
+                                admin_id,
+                                f"❌ Ошибка при создании пользователя:\n"
+                                f"User ID: {uid}\n"
+                                f"Username: {msg.from_user.username}\n"
+                                f"Error: {str(e)}"
+                            )
+                        except Exception as admin_e:
+                            logger.error(f"Не удалось отправить сообщение админу {admin_id}: {admin_e}")
+                    
+                    await msg.answer(
+                        "❌ Произошла ошибка. Пожалуйста, попробуйте позже или обратитесь к администратору.",
+                        reply_markup=kb_menu
+                    )
+                    await state.clear()
+                    return
+
         # Проверка на спам (только для новых вакансий)
         if not editing_job_id:
             with SessionLocal() as session:
-                last_job = session.query(Job).filter_by(user_id=msg.from_user.id).order_by(Job.created_at.desc()).first()
+                last_job = session.query(Job).filter_by(user_id=uid).order_by(Job.created_at.desc()).first()
                 if last_job and (datetime.now(timezone.utc) - last_job.created_at).total_seconds() < 300:
                     await msg.answer(
                         "⏳ Подождите 5 минут перед публикацией следующей вакансии.",
@@ -343,8 +375,6 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
             )
             await prepare_vacancy_impl(msg, state)
             return
-
-        uid = msg.from_user.id
 
         # Повторная проверка возможности публикации
         can_post, message, invites_count = can_post_more_extended(uid)
@@ -403,74 +433,144 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                         reply_markup=kb_menu
                     )
         else:
-            # Публикация в канал
-            vacancy_text = (
-                f"<b>🔥 {data['title']}</b>\n\n"
-                f"📍 <b>Адрес:</b> {data['address']}\n"
-                f"💵 <b>Оплата:</b> {data['payment']}\n"
-                f"☎️ <b>Контакт:</b> {data['contact']}"
-            )
-
-            if data.get('extra'):
-                vacancy_text += f"\n📌 <b>Примечание:</b> {data['extra']}"
-
-            posted = await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=vacancy_text,
-                parse_mode=ParseMode.HTML
-            )
-
-            # Кнопка отклика
-            response_button = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="📨 Откликнуться",
-                    url=f"https://t.me/{msg.from_user.username}" if msg.from_user.username
-                    else f"tg://user?id={msg.from_user.id}"
-                )]
-            ])
-
-            await bot.edit_message_reply_markup(
-                chat_id=CHANNEL_ID,
-                message_id=posted.message_id,
-                reply_markup=response_button
-            )
-
-            # Сохранение в базу
-            saved = await asyncio.to_thread(save_job_db, uid, posted.message_id, data)
-            if not saved:
-                await msg.answer("❌ Ошибка при сохранении вакансии в базе.")
-                await state.clear()
-                return
-
-            # Уменьшение счетчика публикаций (только если это не админ, не can_post=True и не первая публикация)
             try:
-                with SessionLocal() as session:
-                    user = session.query(User).filter_by(telegram_id=uid).first()
-                    if user:
-                        # Проверяем, первая ли это публикация
-                        job_count = session.query(func.count(Job.id)).filter_by(user_id=uid).scalar()
-                        
-                        # Уменьшаем счетчик только если это не первая публикация
-                        if job_count > 1 and user.allowed_posts > 0 and not user.can_post:
-                            user.allowed_posts -= 1
-                            session.commit()
-                            logger.info(f"Уменьшен счетчик публикаций для пользователя {uid}")
-            except Exception as e:
-                logger.error(f"Ошибка при обновлении счетчика публикаций: {e}")
+                # Публикация в канал
+                vacancy_text = (
+                    f"<b>🔥 {data['title']}</b>\n\n"
+                    f"📍 <b>Адрес:</b> {data['address']}\n"
+                    f"💵 <b>Оплата:</b> {data['payment']}\n"
+                    f"☎️ <b>Контакт:</b> {data['contact']}"
+                )
 
-            await msg.answer(
-                "✅ Ваша вакансия успешно опубликована!\n\n"
-                f"📄 Ссылка: {CHANNEL_URL}/{posted.message_id}\n"
-                "📋 Для управления вакансиями используйте 'Мои вакансии'",
-                reply_markup=kb_menu
-            )
+                if data.get('extra'):
+                    vacancy_text += f"\n📌 <b>Примечание:</b> {data['extra']}"
+
+                posted = await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=vacancy_text,
+                    parse_mode=ParseMode.HTML
+                )
+
+                # Кнопка отклика
+                response_button = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="📨 Откликнуться",
+                        url=f"https://t.me/{msg.from_user.username}" if msg.from_user.username
+                        else f"tg://user?id={msg.from_user.id}"
+                    )]
+                ])
+
+                await bot.edit_message_reply_markup(
+                    chat_id=CHANNEL_ID,
+                    message_id=posted.message_id,
+                    reply_markup=response_button
+                )
+
+                # Сохранение в базу
+                try:
+                    saved = await asyncio.to_thread(save_job_db, uid, posted.message_id, data)
+                    if not saved:
+                        raise Exception("Не удалось сохранить вакансию в базу данных")
+                except Exception as e:
+                    # Отправляем ошибку админам
+                    for admin_id in ADMINS:
+                        try:
+                            await bot.send_message(
+                                admin_id,
+                                f"❌ Ошибка при сохранении вакансии:\n"
+                                f"User ID: {uid}\n"
+                                f"Message ID: {posted.message_id}\n"
+                                f"Error: {str(e)}\n"
+                                f"Data: {data}"
+                            )
+                        except Exception as admin_e:
+                            logger.error(f"Не удалось отправить сообщение админу {admin_id}: {admin_e}")
+                    
+                    # Удаляем сообщение из канала, так как не смогли сохранить в базу
+                    try:
+                        await bot.delete_message(chat_id=CHANNEL_ID, message_id=posted.message_id)
+                    except Exception as delete_e:
+                        logger.error(f"Не удалось удалить сообщение из канала: {delete_e}")
+                    
+                    await msg.answer(
+                        "❌ Произошла ошибка при сохранении вакансии. Пожалуйста, попробуйте позже или обратитесь к администратору.",
+                        reply_markup=kb_menu
+                    )
+                    await state.clear()
+                    return
+
+                # Уменьшение счетчика публикаций (только если это не админ, не can_post=True и не первая публикация)
+                try:
+                    with SessionLocal() as session:
+                        user = session.query(User).filter_by(telegram_id=uid).first()
+                        if user:
+                            # Проверяем, первая ли это публикация
+                            job_count = session.query(func.count(Job.id)).filter_by(user_id=uid).scalar()
+                            
+                            # Уменьшаем счетчик только если это не первая публикация
+                            if job_count > 1 and user.allowed_posts > 0 and not user.can_post:
+                                user.allowed_posts -= 1
+                                session.commit()
+                                logger.info(f"Уменьшен счетчик публикаций для пользователя {uid}")
+                except Exception as e:
+                    logger.error(f"Ошибка при обновлении счетчика публикаций: {e}")
+                    # Отправляем ошибку админам
+                    for admin_id in ADMINS:
+                        try:
+                            await bot.send_message(
+                                admin_id,
+                                f"❌ Ошибка при обновлении счетчика публикаций:\n"
+                                f"User ID: {uid}\n"
+                                f"Error: {str(e)}"
+                            )
+                        except Exception as admin_e:
+                            logger.error(f"Не удалось отправить сообщение админу {admin_id}: {admin_e}")
+
+                await msg.answer(
+                    "✅ Ваша вакансия успешно опубликована!\n\n"
+                    f"📄 Ссылка: {CHANNEL_URL}/{posted.message_id}\n"
+                    "📋 Для управления вакансиями используйте 'Мои вакансии' \n Это даст возможность удалить или отредактировать вакансию",
+                    reply_markup=kb_menu
+                )
+
+            except Exception as e:
+                logger.error(f"Ошибка при публикации вакансии: {e}")
+                # Отправляем ошибку админам
+                for admin_id in ADMINS:
+                    try:
+                        await bot.send_message(
+                            admin_id,
+                            f"❌ Ошибка при публикации вакансии:\n"
+                            f"User ID: {uid}\n"
+                            f"Error: {str(e)}\n"
+                            f"Data: {data}"
+                        )
+                    except Exception as admin_e:
+                        logger.error(f"Не удалось отправить сообщение админу {admin_id}: {admin_e}")
+                
+                await msg.answer(
+                    "❌ Произошла ошибка при публикации вакансии. Пожалуйста, попробуйте позже или обратитесь к администратору.",
+                    reply_markup=kb_menu
+                )
 
         await state.clear()
 
     except Exception as e:
-        logger.error(f"Ошибка при обработке вакансии: {e}")
+        logger.error(f"Критическая ошибка при обработке вакансии: {e}")
+        # Отправляем ошибку админам
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"❌ Критическая ошибка при обработке вакансии:\n"
+                    f"User ID: {msg.from_user.id}\n"
+                    f"Error: {str(e)}"
+                )
+            except Exception as admin_e:
+                logger.error(f"Не удалось отправить сообщение админу {admin_id}: {admin_e}")
+        
         await msg.answer(
-            "❌ Произошла ошибка при обработке вакансии. Попробуйте позже.",
+            "❌ Произошла ошибка. Пожалуйста, попробуйте позже или обратитесь к администратору.",
             reply_markup=kb_menu
         )
         await state.clear()
