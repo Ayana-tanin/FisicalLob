@@ -523,8 +523,11 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                             # Проверяем, первая ли это публикация
                             job_count = session.query(func.count(Job.id)).filter_by(user_id=uid).scalar()
                             
-                            # Уменьшаем счетчик только если это не первая публикация
-                            if job_count > 1 and user.allowed_posts > 0 and not user.can_post:
+                            # Уменьшаем счетчик только если:
+                            # 1. Это не первая публикация
+                            # 2. У пользователя нет постоянного разрешения (can_post=False)
+                            # 3. Есть доступные публикации
+                            if job_count > 1 and not user.can_post and user.allowed_posts > 0:
                                 user.allowed_posts -= 1
                                 session.commit()
                                 logger.info(f"Уменьшен счетчик публикаций для пользователя {uid}")
@@ -605,15 +608,13 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
                 # Новый пользователь - первая публикация бесплатно
                 return True, "Первая публикация бесплатно!", 0
 
-            # Если у пользователя can_post = True - всегда можем
+            # Если у пользователя can_post = True - всегда можем публиковать
             if user.can_post:
-                return True, "У вас есть разрешение на публикацию", user.invites
-
-            now = datetime.now(timezone.utc)
+                return True, "У вас есть постоянное разрешение на публикацию", user.invites
 
             # Проверка месячной подписки
-            if user.can_post_until and user.can_post_until > now:
-                return True, "У вас есть месячная подписка", user.invites
+            if user.can_post_until and user.can_post_until > datetime.utcnow():
+                return True, f"У вас есть месячная подписка до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}", user.invites
 
             # Проверка разовых публикаций
             if user.allowed_posts > 0:
@@ -632,7 +633,7 @@ def can_post_more_extended(user_id: int) -> tuple[bool, str, int]:
                 session.commit()
                 return True, "Получена публикация за приглашение друзей!", 0
 
-            return False, "Вы уже опубликовали бесплатную вакансию.", user.invites
+            return False, "У вас нет доступных публикаций.", user.invites
 
     except Exception as e:
         logger.error(f"Ошибка при can_post_more_extended для пользователя {user_id}: {e}")
@@ -680,30 +681,30 @@ async def allow_posting_handler(message: Message):
 
             try:
                 if is_permanent:
-                    # Постоянное разрешение
+                    # Постоянное разрешение - устанавливаем can_post = True
                     user.can_post = True
                     user.can_post_until = None
                     user.allowed_posts = 0
-                    msg = f"✅ Пользователю {username_or_id} предоставлено постоянное разрешение."
+                    msg = f"✅ Пользователю {username_or_id} предоставлено постоянное разрешение на публикацию."
                     logger.info(
                         f"Админ {message.from_user.id} выдал постоянное разрешение пользователю {user.telegram_id} "
                         f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
                     )
                 elif is_month:
-                    # Месячная подписка
-                    user.can_post = False  # Сбрасываем постоянное разрешение
-                    user.can_post_until = datetime.now(timezone.utc) + timedelta(days=30)
-                    user.allowed_posts = 0  # Сбрасываем разовые публикации
+                    # Месячная подписка - сбрасываем can_post
+                    user.can_post = False
+                    user.can_post_until = datetime.utcnow() + timedelta(days=30)
+                    user.allowed_posts = 0
                     msg = f"✅ Пользователю {username_or_id} предоставлен месяц публикаций до {user.can_post_until.strftime('%d.%m.%Y %H:%M')}"
                     logger.info(
                         f"Админ {message.from_user.id} выдал месячную подписку пользователю {user.telegram_id} "
                         f"(было: can_post={old_can_post}, can_post_until={old_can_post_until}, allowed_posts={old_allowed_posts})"
                     )
                 else:
-                    # Разовая публикация
-                    user.can_post = False  # Сбрасываем постоянное разрешение
-                    user.can_post_until = None  # Сбрасываем подписку
-                    user.allowed_posts += 1  # Добавляем одну публикацию
+                    # Разовая публикация - сбрасываем can_post
+                    user.can_post = False
+                    user.can_post_until = None
+                    user.allowed_posts += 1
                     msg = f"✅ Пользователю {username_or_id} добавлена 1 публикация. Всего: {user.allowed_posts}"
                     logger.info(
                         f"Админ {message.from_user.id} добавил публикацию пользователю {user.telegram_id} "
@@ -711,6 +712,12 @@ async def allow_posting_handler(message: Message):
                     )
 
                 session.commit()
+                
+                # Проверяем, что изменения сохранились
+                session.refresh(user)
+                if is_permanent and not user.can_post:
+                    raise Exception("Не удалось установить постоянное разрешение")
+                
                 await message.answer(msg)
                 
                 # Отправляем уведомление пользователю
@@ -722,7 +729,6 @@ async def allow_posting_handler(message: Message):
                     )
                 except Exception as notify_e:
                     logger.error(f"Не удалось отправить уведомление пользователю {user.telegram_id}: {notify_e}")
-                    # Не прерываем выполнение, если не удалось отправить уведомление
                 
             except Exception as e:
                 logger.error(f"Ошибка при обновлении прав пользователя {user.telegram_id}: {e}")
