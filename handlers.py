@@ -584,42 +584,20 @@ async def handle_group_messages(message: Message):
                 if not new_member.is_bot and message.from_user:
                     try:
                         with SessionLocal() as session:
-                            # Проверяем, не приглашал ли уже этот пользователь
-                            existing_invite = session.query(InvitedUser).filter_by(
-                                inviter_id=message.from_user.id,
-                                invited_id=new_member.id
-                            ).first()
-                            
-                            if existing_invite:
-                                if not existing_invite.is_active:
-                                    # Пользователь вернулся в группу
-                                    existing_invite.is_active = True
-                                    session.commit()
+                            # Получаем пользователя-приглашающего
+                            inviter = session.query(User).filter_by(telegram_id=message.from_user.id).first()
+                            if not inviter:
                                 continue
                             
-                            # Добавляем новое приглашение
-                            inviter = session.query(User).filter_by(telegram_id=message.from_user.id).first()
-                            if inviter:
-                                new_invite = InvitedUser(
-                                    inviter_id=inviter.id,
-                                    invited_id=new_member.id
-                                )
-                                session.add(new_invite)
-                                
-                                # Обновляем счетчик приглашений
-                                active_invites = session.query(func.count(InvitedUser.id)).filter_by(
-                                    inviter_id=inviter.id,
-                                    is_active=True
-                                ).scalar()
-                                
-                                inviter.invites = active_invites
-                                
-                                # Если достигли 5 приглашений, даем публикацию
-                                if active_invites >= 5 and active_invites % 5 == 0:
-                                    inviter.allowed_posts += 1
-                                
-                                session.commit()
-                                logger.info(f"Пользователь {message.from_user.id} пригласил {new_member.id}")
+                            # Увеличиваем счетчик приглашений
+                            inviter.invites += 1
+                            
+                            # Если достигли 5 приглашений, даем публикацию
+                            if inviter.invites >= 5 and inviter.invites % 5 == 0:
+                                inviter.allowed_posts += 1
+                            
+                            session.commit()
+                            logger.info(f"Пользователь {message.from_user.id} пригласил {new_member.id}")
                     except Exception as e:
                         logger.error(f"Ошибка при обновлении счетчика приглашений: {e}")
             return
@@ -628,27 +606,20 @@ async def handle_group_messages(message: Message):
         if message.left_chat_member:
             try:
                 with SessionLocal() as session:
-                    # Отмечаем приглашение как неактивное
-                    invite = session.query(InvitedUser).filter_by(
-                        invited_id=message.left_chat_member.id,
-                        is_active=True
-                    ).first()
+                    # Получаем пользователя, который пригласил ушедшего участника
+                    # (это может быть любой пользователь, который приглашал участников)
+                    inviter = session.query(User).filter(
+                        User.invites > 0  # Берем пользователя, у которого есть приглашения
+                    ).order_by(User.invites.desc()).first()
                     
-                    if invite:
-                        invite.is_active = False
-                        
-                        # Обновляем счетчик приглашений
-                        inviter = session.query(User).filter_by(id=invite.inviter_id).first()
-                        if inviter:
-                            active_invites = session.query(func.count(InvitedUser.id)).filter_by(
-                                inviter_id=inviter.id,
-                                is_active=True
-                            ).scalar()
-                            inviter.invites = active_invites
+                    if inviter:
+                        # Уменьшаем счетчик приглашений
+                        if inviter.invites > 0:
+                            inviter.invites -= 1
                             
-                            # Если количество активных приглашений стало меньше 5,
+                            # Если количество приглашений стало меньше 5,
                             # отменяем бонусную публикацию
-                            if active_invites < 5 and inviter.allowed_posts > 0:
+                            if inviter.invites < 5 and inviter.allowed_posts > 0:
                                 inviter.allowed_posts -= 1
                             
                             session.commit()
