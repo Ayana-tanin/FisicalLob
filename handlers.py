@@ -442,14 +442,19 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                 await state.clear()
                 return
 
-            # Уменьшение счетчика публикаций (только если это не админ и не can_post=True)
+            # Уменьшение счетчика публикаций (только если это не админ, не can_post=True и не первая публикация)
             try:
                 with SessionLocal() as session:
                     user = session.query(User).filter_by(telegram_id=uid).first()
-                    if user and user.allowed_posts > 0 and not user.can_post:
-                        user.allowed_posts -= 1
-                        session.commit()
-                        logger.info(f"Уменьшен счетчик публикаций для пользователя {uid}")
+                    if user:
+                        # Проверяем, первая ли это публикация
+                        job_count = session.query(func.count(Job.id)).filter_by(user_id=uid).scalar()
+                        
+                        # Уменьшаем счетчик только если это не первая публикация
+                        if job_count > 1 and user.allowed_posts > 0 and not user.can_post:
+                            user.allowed_posts -= 1
+                            session.commit()
+                            logger.info(f"Уменьшен счетчик публикаций для пользователя {uid}")
             except Exception as e:
                 logger.error(f"Ошибка при обновлении счетчика публикаций: {e}")
 
