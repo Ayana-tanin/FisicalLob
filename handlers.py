@@ -313,23 +313,7 @@ def create_response_buttons(contact: str, user_id: int, username: str | None) ->
             url=f"https://t.me/+{telegram_number}"
         )
     ])
-    
-    # Добавляем кнопку для связи с автором вакансии
-    if username:
-        buttons.append([
-            InlineKeyboardButton(
-                text="👤 Автор вакансии",
-                url=f"https://t.me/{username}"
-            )
-        ])
-    else:
-        buttons.append([
-            InlineKeyboardButton(
-                text="👤 Автор вакансии",
-                url=f"tg://user?id={user_id}"
-            )
-        ])
-    
+        
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -431,7 +415,7 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
         # Валидация телефона
         if not PHONE_RE.match(data['contact']):
             await msg.reply(
-                "❌ Неверный формат телефона. Используйте формат: +996XXXXXXXXX. Без букв\n"
+                "❌ Неверный формат телефона. Используйте формат: +996XXXXXXXXX. Без букв и пробелов\n"
                 "Пожалуйста, заполните форму заново:"
             )
             await prepare_vacancy_impl(msg, state)
