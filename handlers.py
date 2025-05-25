@@ -33,7 +33,8 @@ TEMPLATE = {
     "contact": r"^☎️\s*Контакт:\s*(.+)$",
     "extra": r"^📌\s*Примечание:\s*(.*)$",
 }
-PHONE_RE = re.compile(r"^\+?\d[\d\s\-]{7,}\d$")
+# Обновленное регулярное выражение для телефона (строго +996XXXXXXXXX)
+PHONE_RE = re.compile(r"^\+996\d{9}$")
 
 kb_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -185,11 +186,16 @@ async def edit_job_callback(callback: CallbackQuery, state: FSMContext):
             
             current_text += "\n\nОтправьте новую версию вакансии в том же формате:"
             
+            # Обновляем кнопку отклика
+            response_button = create_response_buttons(
+                job.all_info['contact'],
+                callback.from_user.id,
+                callback.from_user.username
+            )
+            
             await callback.message.edit_text(
                 current_text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_edit_{job_id}")]
-                ])
+                reply_markup=response_button
             )
             
             await state.set_state(VacancyForm.all_info)
@@ -274,6 +280,57 @@ async def contact_admin_button(msg: Message):
             [InlineKeyboardButton(text="📱 Написать админу", url=f"https://t.me/AkylaiMamyt")]
         ])
     )
+
+
+def create_response_buttons(contact: str, user_id: int, username: str | None) -> InlineKeyboardMarkup:
+    """
+    Создает кнопки для отклика на вакансию
+    Args:
+        contact: Номер телефона из вакансии
+        user_id: ID пользователя, разместившего вакансию
+        username: Username пользователя, разместившего вакансию
+    Returns:
+        InlineKeyboardMarkup с кнопками для отклика
+    """
+    buttons = []
+    
+    # Проверяем валидность номера телефона
+    if PHONE_RE.match(contact):
+        # Если номер валидный, добавляем кнопку WhatsApp
+        whatsapp_number = contact.replace("+", "")  # Убираем + для WhatsApp
+        buttons.append([
+            InlineKeyboardButton(
+                text="📱 WhatsApp",
+                url=f"https://wa.me/{whatsapp_number}"
+            )
+        ])
+    
+    # Добавляем кнопку Telegram для номера телефона
+    telegram_number = contact.replace("+", "").replace(" ", "")  # Убираем + и пробелы
+    buttons.append([
+        InlineKeyboardButton(
+            text="📨 Telegram",
+            url=f"https://t.me/+{telegram_number}"
+        )
+    ])
+    
+    # Добавляем кнопку для связи с автором вакансии
+    if username:
+        buttons.append([
+            InlineKeyboardButton(
+                text="👤 Автор вакансии",
+                url=f"https://t.me/{username}"
+            )
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text="👤 Автор вакансии",
+                url=f"tg://user?id={user_id}"
+            )
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # Обработка формы и публикация вакансии
@@ -427,13 +484,11 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                     )
                     
                     # Обновляем кнопку отклика
-                    response_button = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="📨 Откликнуться",
-                            url=f"https://t.me/{msg.from_user.username}" if msg.from_user.username
-                            else f"tg://user?id={msg.from_user.id}"
-                        )]
-                    ])
+                    response_button = create_response_buttons(
+                        data['contact'],
+                        msg.from_user.id,
+                        msg.from_user.username
+                    )
                     
                     await bot.edit_message_reply_markup(
                         chat_id=CHANNEL_ID,
@@ -472,13 +527,11 @@ async def process_vacancy(msg: Message, state: FSMContext, bot: Bot):
                 )
 
                 # Кнопка отклика
-                response_button = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="📨 Откликнуться",
-                        url=f"https://t.me/{msg.from_user.username}" if msg.from_user.username
-                        else f"tg://user?id={msg.from_user.id}"
-                    )]
-                ])
+                response_button = create_response_buttons(
+                    data['contact'],
+                    msg.from_user.id,
+                    msg.from_user.username
+                )
 
                 await bot.edit_message_reply_markup(
                     chat_id=CHANNEL_ID,
@@ -1003,13 +1056,11 @@ async def handle_private_messages(message: Message, state: FSMContext):
                     )
 
                     # Кнопка отклика
-                    response_button = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="📨 Откликнуться",
-                            url=f"https://t.me/{message.from_user.username}" if message.from_user.username
-                            else f"tg://user?id={message.from_user.id}"
-                        )]
-                    ])
+                    response_button = create_response_buttons(
+                        data['contact'],
+                        message.from_user.id,
+                        message.from_user.username
+                    )
 
                     await message.bot.edit_message_reply_markup(
                         chat_id=CHANNEL_ID,
