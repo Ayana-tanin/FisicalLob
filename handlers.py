@@ -60,7 +60,7 @@ async def cmd_start(msg: Message):
         "👋 Привет! Я бот для публикации вакансий.\n\n"
         "🎁 Первая публикация бесплатно!\n"
         "📝 Для следующих вакансий:\n"
-        "• Оплатить 100 сом\n"
+        "• Оплатить 30 сом\n"
         "• Или добавить 5 друзей в группу",
         reply_markup=kb_menu
     )
@@ -263,7 +263,7 @@ async def payment_button(msg: Message):
     """Обработчик кнопки оплаты"""
     await msg.answer(
         "💰 Для оплаты свяжитесь с админом:\n\n"
-        "💵 Стоимость: 100 сом\n"
+        "💵 Стоимость: 30 сом\n"
         "⏰ После оплаты возможность публикации одной вакнсии",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="👤 Связаться с админом", url=f"https://t.me/{ADMIN_USERNAME}")]
@@ -300,7 +300,7 @@ def create_response_buttons(contact: str, user_id: int, username: str | None) ->
         whatsapp_number = contact.replace("+", "")  # Убираем + для WhatsApp
         buttons.append([
             InlineKeyboardButton(
-                text="📱 WhatsApp",
+                text="📱WhatsApp",
                 url=f"https://wa.me/{whatsapp_number}"
             )
         ])
